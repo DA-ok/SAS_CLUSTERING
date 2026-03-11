@@ -1,0 +1,322 @@
+SAS_CLUSTERING
+
+/* INTRO
+Sviluppo del codice seguente (limitato allo scenario Delayed Transition):
+- calcolo impatto climate medio a livello di ATECO2, partendo dal campione di sviluppo
+- calcolo della distribuzione degli impatti, calcolati al punto precedente
+- una volta agganciato l'impatto climate ad ogni ctp del ptf CEMA, queste vengono clusterizzate nel ventile di corrispondenza, 
+in base al posizionamento del proprio impatto climate rispetto alla distribuzione calcolata nel punto precedente 
+*/
+
+options compress=yes; /* reduces datasets size and save disk space */
+options mprint /* Shows the entire log so to eventually better understand what the code is doing */
+	mlogic /* Shows macro execution logic in the log. */
+	symbolgen /* Shows how macro variables resolve */
+	spool /* Stores generated code in memory for better error reporting */;
+options minoperator /* Allows the use of the IN operator inside macro %if conditions */;
+
+/* DEFINING LIBRARIES */
+/* perimetro cema */
+%let lib_cema = cema;
+%let db_cema = aggancio_cond;
+
+/* fornitura condizionamento modelli */
+%let lib_pd_lgd = input;
+%let pd_dt = ptf_rt_pd_del;
+
+%let orizzonti_temp = 2028
+						2030
+						2050;
+
+%let lib_out = dt_rt;
+
+%let lib_out_cond = outputrt;
+%let db_out = CEMA_RC_PD_DT;
+
+/* Perimetro CEMA con aggiunta EAD e GCA+Offbalance */
+/* AGGREGATION */
+proc sql;
+	create table NFC_ValueCube as
+		select distinct 
+				LegalEntity,
+	            NAG,
+                Flag_cluster,
+				input(NAG, best.) as Nag_New, /* TRANSFORMING THE VAR IN NUMBER */
+				sum(GrossCarryingAmount) as GCA_GHG, /* SUMMING UP BY COLUMN */
+				sum(GCA_OffBalance) as OffBalance
+		from ghg.controparti_input_2509_v21 (where=((GrossCarryingAmount ne . or GCA_OffBalance ne .) /* FILTERING OUT MISSINGS FROM YOUR MAIN DB */ and Flag_cluster ne "TITOLI_A023_A030" /* FILTERING OUT */ ))
+			group by LegalEntity
+					,NAG; /* KEYS THROUGH WHICH YOU ARE SUMMING UP */
+quit;
+
+/* JOINING + A FEW FORMAT PLAYS */
+Proc sql;
+	create table DB_CEMA as
+		select
+			a.cod_banca as abi
+			,a.cod_anag as nag
+			,put(a.cod_anag, z8.) as nag_char /* MAKING THE VAR AS STRING ADDING 0s FROM THE LEFT, TILL HAVING 8 CHRS */
+			,a.imp_gca
+			,IMP_EAD_EBA_CPTY as EAD /* CHANGE NAME */
+
+			/* settori */
+			,coalesce(a.COD_ATECO_GRUPPO, a.COD_ATECO_IND) as ATECO /* TAKE THE FIRST NO-MISSING VALUE AMONG THE TWO VARS */
+			,substr(coalesce(a.COD_ATECO_GRUPPO, a.COD_ATECO_IND), 1, 2) as ATECO_2 /* ONCE TAKEN THE FIRST NO-MISSING VALUE AMONG THE TWO, GRAB THE CHRS STRTING FROM POSITION 1 */
+
+			/* score rischio fisico */
+			,a.NUM_SCORE_RT_DECO_PRENOTCH
+
+			/* settori */
+			,a.COD_Settore_CE
+			,a.COD_Settore_CE_ristretto
+			,a.COD_Settori_IPR
+
+			/* importi */
+			,b.offbalance
+			,sum(b.OffBalance, a.IMP_GCA) as GCA_OFF 
+		from &lib_cema..&db_cema. as a
+			left join NFC_ValueCube as b
+				on a.Cod_banca=b.LegalEntity
+				and a.Cod_Anag=b.Nag_New; /* JOIN KEYS */
+quit;
+
+/* Definizione db sviluppo pd con i soli orizzonti interessati (2028, 2030, 2050) */
+data PD_CREDITO_DT (keep= COD_ABI NAG Ateco_6_digit ATECO_2 Proiezione PD_Proj PD_Proj_Cli);
+set &lib_pd_lgd..&pd_dt. (where=(Proiezione in ("T+4(2028)","T+6(2030)","T+26(2050)")));
+ATECO_2 = substr(Ateco_6_digit, 1, 2);
+run;
+/* 290.538 */
+
+/* 
+Per ciascuna ctp nel campione di sviluppo si calcola l'impatto climate dato dalla variazione relativa della PD
+rispetto alla PD proiettata, a seconda dell'anno di riferimento:
+- 2028 -> Breve Termine 
+- 2030 -> Medio Termine
+- 2050 -> Lungo Termine
+
+Tuttavia, siccome il campione di sviluppo ha soltanto 90k circa di ctp, per farsi che alla fine venga assegnato un impatto climate 
+a tutte le ctp nel ptf CEMA, viene calcolato un impatto climate a livello di ATECO2:
+PD baseline media / PD proiettata media = RC media -> impatto climate medio per l'ATECO2 di corrispondenza 
+*/
+
+/* Calcolo Variazione Relativa media per ATECO2 */
+
+/*1. Calcolo RC per ctp, all'interno del campione di sviluppo (informazione aggiuntiva da tenere in db ma non rilevante per step successivi) */
+proc sql;
+	create table &lib_out..PD_IMPATTI_DELAYED_TRANSITION /* SAVING INSIDE THE DEFINED LIBRARY */
+	as select 
+		a.cod_abi
+		,a.nag
+		,a.ATECO_2
+		,scan(a.proiezione, 2, "()") as orizzonte /* TAKE TEH 2ND ELEMENT WITHIN THE () */
+		,a.PD_Proj
+		,a.PD_Proj_Cli
+		,(a.PD_Proj_Cli - a.PD_Proj)/PD_Proj as RC_PD_CLI
+
+		,b.GCA_OFF
+		,b.EAD
+
+		,case
+			when b.nag is null then 0 
+			else 1 end as fl_agg /* JOIN CHECK */
+	from PD_CREDITO_DT as a
+		left join DB_CEMA as b
+		on a.cod_abi = b.abi
+		and a.nag = b.nag;
+run;
+/* 290.538 */
+
+proc freq data=&lib_out..PD_IMPATTI_DELAYED_TRANSITION;
+table orizzonte*fl_agg;
+run;
+/* 24.977 no aggancio (33,33%) */
+
+/* 
+2. Calcolo RC_PD medie per ateco: (PD_proiettata_media - PD_baseline_media) / PD_baseline_media
+
+In aggiunta: calcolo NUMERICHE per ATECO2 e PROIEZIONE:
+- ctp che concorrono al calcolo delle PD medie (bs e proj), dalle quali poi viene calcolato il RC medio
+- PD diverse (bs e proj) che concorrono al calcolo delle PD medie
+*/
+proc sql;
+	create table &lib_out..RC_PD_Medie
+		as select
+				ATECO_2
+				,proiezione
+				,mean(PD_Proj_Cli) as PD_Proj_Cli_mean
+				,mean(PD_Proj) as PD_Proj_mean
+				,(calculated PD_Proj_Cli_mean - calculated PD_Proj_mean) / calculated PD_Proj_mean *100 as RC_PD_MEAN
+				,count(PD_Proj_Cli) as N_CTP
+				,count(distinct PD_Proj_Cli) as NUnic_PD_Proj_Cli
+				,count(distinct PD_Proj) as NUnic_PD_Proj
+	from &lib_out..PD_IMPATTI_DELAYED_TRANSITION (rename=(orizzonte=proiezione)) /* OLD_VAR = NEW_VAR */
+		group by ATECO_2
+				,proiezione;
+run;
+
+/* Distribuzione RC_PD_MEAN */
+%macro RC_PD_DT(proiezione=);
+
+	%do m=1 %to %sysfunc(countw(&proiezione., %str( ))); /* %SYSFUNC IS NECESSARY SO TO RUN A FUNCTION INSIDE A MACRO -> COUNTW() COUNTS THE CHRS INSIDE A DEFINE LIST (%LET) WHILE %str( ) IS SAYING THAT THESE CHRS ARE SEPARATED BY "SPACE" */
+		%let orizzonte=%scan(&proiezione., &m., %str( )); /* TAKING ONE CHR PER TIME */
+
+				data RC_PD_&orizzonte.;
+				set &lib_out..RC_PD_Medie;
+				where proiezione = "&orizzonte.";
+				run;
+
+				/* SELECT ALL THE DISTINCT AVG_IMPACT */
+				proc sort data=RC_PD_&orizzonte. nodupkey out=RC_PD_SORT_&orizzonte.;
+				by RC_PD_MEAN;
+				run;
+
+				/* MAKE A DISTRIBUTION OUT OF IT, FINDING THE EXTRME VALUES */
+				proc univariate data=RC_PD_SORT_&orizzonte.;
+					var RC_PD_MEAN; /* VAR BY WHICH YOU ARE CLUSTERING */
+					output out=&lib_out..distr_RC_PD_CLI_&orizzonte.
+						min= Delta_min
+						max= Delta_max
+						nmiss= N_Missing
+						pctlpts=5 10 15 20 25 30 35 40 45 50 55 60 65 70 75 80 85 90 95 99
+						pctlpre= P_; /* THE PREFIX TO ADD TO THE CLUSTER */
+				run;
+
+	%end;
+
+%mend RC_PD_DT;
+
+%RC_PD_DT(proiezione=&orizzonti_temp.);
+
+/* Macro per orizzonte di proiezione */
+%macro distr_RC_PD(proiezione=);
+
+		%do n=1 %to %sysfunc(countw(&proiezione., %str( )));
+			%let orizzonte=%scan(&proiezione., &n., %str( ));
+
+			/* Aggancio di RC_PD_MEAN sul ptf CEMA in base all'ATECO2 */
+				proc sql;
+					create table &lib_out..RC_PD_Medie_CEMA_&orizzonte.
+					as select
+						a.abi
+						,a.nag
+						,a.ateco_2
+						,a.GCA_OFF
+						,a.offbalance
+						,a.imp_gca
+						,a.EAD
+						,a.NUM_SCORE_RT_DECO_PRENOTCH
+						,b.proiezione
+						,b.RC_PD_MEAN
+
+						,case 
+							when b.ATECO_2 is null then 0
+							else 1 end as fl_agg
+					from DB_CEMA (where=(NUM_SCORE_RT_DECO_PRENOTCH ne .)) as a
+						left join RC_PD_&orizzonte. as b
+						on a.ATECO_2 = b.ATECO_2;
+				quit;
+
+				proc sql;
+					create table RC_PD_Medie_CEMA_&orizzonte.
+					as select
+						ATECO_2
+						,proiezione
+						,RC_PD_MEAN
+						,count(*) as N_OBS
+						,sum(EAD)/1000000 as EAD
+					from &lib_out..RC_PD_Medie_CEMA_&orizzonte.
+						group by ATECO_2
+								,proiezione
+								,RC_PD_MEAN;
+				quit;
+
+				/* Assegnazione a ciascuna ctp del cluster di appartenza, in base alla propria RC_PD_MEAN */
+
+				/* RECALLING, IN A FICTICIOUS DB, THE VALUES OF THE CLUSTERS */
+				data _null_;
+					set &lib_out..distr_RC_PD_CLI_&orizzonte.;
+
+
+					call symputx("MIN", Delta_min);
+					call symputx("P5", P_5);
+					call symputx("P10", P_10);
+					call symputx("P15", P_15);
+					call symputx("P20", P_20);
+					call symputx("P25", P_25);
+					call symputx("P30", P_30);
+					call symputx("P35", P_35);
+					call symputx("P40", P_40);
+					call symputx("P45", P_45);
+					call symputx("P50", P_50);
+					call symputx("P55", P_55);
+					call symputx("P60", P_60);
+					call symputx("P65", P_65);
+					call symputx("P70", P_70);
+					call symputx("P75", P_75);
+					call symputx("P80", P_80);
+					call symputx("P85", P_85);
+					call symputx("P90", P_90);
+					call symputx("P95", P_95);
+					call symputx("P99", P_99);
+				run;
+
+				/* CLUSTERING */
+				data conc_pct_rc_pd_&orizzonte.;
+					set RC_PD_Medie_CEMA_&orizzonte.;
+
+					length CLUSTER $7.;
+
+					if RC_PD_MEAN  >= &P99.-1e-7 then CLUSTER = "99";
+					else if RC_PD_MEAN  >= &P95.-1e-9 then CLUSTER = "95";
+					else if RC_PD_MEAN  >= &P90.-1e-9 then CLUSTER = "90";
+					else if RC_PD_MEAN  >= &P85.-1e-9 then CLUSTER = "85";
+					else if RC_PD_MEAN  >= &P80.-1e-9 then CLUSTER = "80";
+					else if RC_PD_MEAN  >= &P75.-1e-9 then CLUSTER = "75";
+					else if RC_PD_MEAN  >= &P70.-1e-9 then CLUSTER = "70";
+					else if RC_PD_MEAN  >= &P65.-1e-9 then CLUSTER = "65";
+					else if RC_PD_MEAN  >= &P60.-1e-9 then CLUSTER = "60";
+					else if RC_PD_MEAN  >= &P55.-1e-9 then CLUSTER = "55";
+					else if RC_PD_MEAN  >= &P50.-1e-9 then CLUSTER = "50";
+					else if RC_PD_MEAN  >= &P45.-1e-9 then CLUSTER = "45";
+					else if RC_PD_MEAN  >= &P40.-1e-9 then CLUSTER = "40";
+					else if RC_PD_MEAN  >= &P35.-1e-9 then CLUSTER = "35";
+					else if RC_PD_MEAN  >= &P30.-1e-9 then CLUSTER = "30";
+					else if RC_PD_MEAN  >= &P25.-1e-9 then CLUSTER = "25";
+					else if RC_PD_MEAN  >= &P20.-1e-9 then CLUSTER = "20";
+					else if RC_PD_MEAN  >= &P15.-1e-9 then CLUSTER = "15";
+					else if RC_PD_MEAN  >= &P10.-1e-9 then CLUSTER = "10";
+					else if RC_PD_MEAN  >= &P5.-1e-9 then CLUSTER = "05";
+					else if RC_PD_MEAN  ne . then CLUSTER = "00";
+					else CLUSTER = "missing";
+
+				run;
+
+				/* Distribuzione delle ctp, ead e #ATECO2 nei singoli cluster */
+				proc sql;
+					create table &lib_out..COUNT_&orizzonte.
+					as select
+						CLUSTER
+						,sum(N_OBS) as N_OBS
+						,count(ATECO_2) as N_ATECO_2
+						,sum(EAD) as EAD
+				from conc_pct_rc_pd_&orizzonte.
+					group by CLUSTER;
+				quit;
+
+				/* Salvataggio db per condizionamento */
+				proc sql;
+					create table &lib_out_cond..&db_out._&orizzonte.
+					as select
+						a.*
+						,CLUSTER
+					from &lib_out..RC_PD_Medie_CEMA_&orizzonte. as a
+						left join conc_pct_rc_pd_&orizzonte. as b
+						on a.ATECO_2 = b.ATECO_2;
+				quit;
+
+
+		%end;
+
+%mend distr_RC_PD;
+
+%distr_RC_PD(proiezione=&orizzonti_temp.);
