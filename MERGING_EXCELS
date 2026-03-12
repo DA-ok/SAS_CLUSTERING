@@ -1,0 +1,96 @@
+# MERGING EXCELS
+
+As every single obv. gives information for a single building corresponding to a specific date (where the auction was held), we can simply concatenate all the excels
+
+import pandas as pd
+from pathlib import Path # to read path where files are kept
+import re # regex
+
+file = "/Users/antoniodagosto/Desktop/CASA_MILANO/01.ALER/01.ASTE/02.EXCEL/2025/esito-3aprile2025.xlsx"
+
+# Extracting from the file's title the date when the auciton was held, and put it into a variable 
+
+AUCTION_DATE = re.split(r"[-_]", Path(file).stem)[-1]
+print(AUCTION_DATE)
+
+db = pd.read_excel(file)
+
+db["AUCTION_DATE"] = AUCTION_DATE
+
+months = ['gennaio','febbraio','marzo','aprile','maggio','giugno','luglio','agosto','settembre','ottobre','novembre','dicembre']
+
+# Splitting the auction date in day, month and year
+
+for AUCTION_MONTH in months:
+    if AUCTION_MONTH in AUCTION_DATE:
+        AUCTION_DAY = AUCTION_DATE.split(month)[0]   # everything before month
+        AUCTION_YEAR = AUCTION_DATE.split(month)[1]  # everything after month
+        print("day:", AUCTION_DAY)
+        print("month:", AUCTION_MONTH)
+        print("year:", AUCTION_YEAR)
+        break
+
+db["AUCTION_DAY"] = AUCTION_DAY
+db["AUCTION_YEAR"] = AUCTION_YEAR
+db["AUCTION_MONTH"] = AUCTION_MONTH
+
+db = db.drop("AUCITON_MONTH", axis=1)
+
+
+
+### EVERYTHING WORKS PERFECTLY FINE! LET'S LOOP IT OVER ALL THE EXCELS
+# Be aware of:
+# - changing the folder all the time 
+# - the fact that Nov2023 behaves like the preceding years rather than the files from the same year
+
+folder_path = Path("/Users/antoniodagosto/Desktop/CASA_MILANO/01.ALER/01.ASTE/02.EXCEL/2020")
+
+months = [
+    'gennaio'
+    ,'febbraio'
+    ,'marzo'
+    ,'aprile'
+    ,'maggio'
+    ,'luglio'
+    ,'giugno'
+    ,'agosto'
+    ,'settembre'
+    ,'ottobre'
+    ,'novembre'
+    ,'dicembre'
+         ]
+
+dfs = []
+
+# Loop over all the excel contained inside the specified folder
+for file in folder_path.glob("*.xlsx"):
+    # Read Excel
+    db = pd.read_excel(file)
+    
+    # Extracting auction date
+    AUCTION_DATE = re.split(r"[-_]", Path(file).stem)[-1]
+
+    # Splitting auction date into "pieces"
+    for month in months:
+        if month in AUCTION_DATE:
+            AUCTION_DAY = AUCTION_DATE.split(month)[0]
+            AUCTION_MONTH = month
+            AUCTION_YEAR = AUCTION_DATE.split(month)[1]
+            break
+
+    # Add new columns
+    db["AUCTION_DATE"] = AUCTION_DATE
+    db["AUCTION_DAY"] = AUCTION_DAY
+    db["AUCTION_MONTH"] = AUCTION_MONTH
+    db["AUCTION_YEAR"] = AUCTION_YEAR
+
+    # List of dateframes
+    dfs.append(db)
+
+final_df = pd.concat(dfs, ignore_index=True)
+
+for file in folder_path.iterdir():
+    print(file, file.suffix)
+
+output_file = folder_path / "FULL_2020.xlsx"
+final_df.to_excel(output_file, index=False)
