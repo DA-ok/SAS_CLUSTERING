@@ -1,0 +1,308 @@
+MATRICE MIGRAZIONE
+
+/* Analisi preliminari sulla nuova fornitura CRIF */
+options compress=yes;
+options mprint mlogic symbolgen spool;
+options minoperator;
+
+proc datasets library=work kill nolist;
+quit;
+
+%let lib_in = CEMADHP;
+%let db_in = PP_VW_DAT_CRIF_AZIENDE_IMP;
+
+%let lib_cema = cema;
+%let db_cema = aggancio_cond;
+
+%let lib_vc = V_C;
+%let db_vc = controparti_input_2509_v21;
+
+%let lib_mapping = mapping;
+%let db_mapping = mapping_ateco_ce_ipr;
+
+
+proc contents data=&lib_in..&db_in.; run;
+
+/* HAZARD LIST */
+
+/*Rischio fisico acuto */
+%let rischio_fis_acu = 		NUM_SCORE_SINTESI_ACUTO_BASE
+				NUM_SCORE_SINTESI_ACUTO_FUT;
+%let hazard_fis_acu_bs =	NUM_SCORE_ALLUVIONE_BASE 
+				NUM_SCORE_FORTI_PRECIP_BASE
+				NUM_SCORE_FRANE_BASE
+				NUM_SCORE_ONDATE_CALORE_BASE 
+				NUM_SCORE_ONDATE_FREDDO_BASE
+				NUM_SCORE_SICCITA_BASE
+				NUM_SCORE_VENTO_ESTREMO_BASE
+				NUM_SCORE_INCENDI_BASE ;
+%let hazard_fis_acu_ft =	NUM_SCORE_ALLUVIONE_FUT
+				NUM_SCORE_FORTI_PRECIP_FUT
+				NUM_SCORE_FRANE_FUT
+				NUM_SCORE_ONDATE_CALORE_FUT
+				NUM_SCORE_ONDATE_FREDDO_FUT
+				NUM_SCORE_SICCITA_FUT
+				NUM_SCORE_VENTO_ESTREMO_FUT
+				NUM_SCORE_INCENDI_FUT;
+/* Rischio fisico cronico */
+%let rischio_fis_cro =		NUM_SCORE_SINTESI_CRONICO_BASE 
+				NUM_SCORE_SINTESI_CRONICO_FUT;
+%let hazard_fis_cro_bs =	NUM_SCORE_DEGRAD_TERRENO_BASE 
+				NUM_SCORE_EROSIONE_COSTE_BASE 
+				NUM_SCORE_PERMAFROST_BASE
+				NUM_SCORE_STRESS_IDRICO_BASE
+				NUM_SCORE_STRESS_TERMICO_BASE;
+%let hazard_fis_cro_ft = 	NUM_SCORE_CAMB_PRECIP_FUT
+				NUM_SCORE_CAMB_TEMP_FUT
+				NUM_SCORE_CAMB_VENTO_FUT
+				NUM_SCORE_DEGRAD_TERRENO_FUT
+				NUM_SCORE_EROSIONE_COSTA_FUT
+				NUM_SCORE_INNALZ_MARE_FUT
+				NUM_SCORE_PERMAFROST_FUT
+				NUM_SCORE_STRESS_IDRICO_FUT
+				NUM_SCORE_STRESS_TERMICO_FUT;
+/* Rischio acuto non climatico */
+%let rischio_non_cli = 		NUM_SCORE_TERREMOTO_BASE
+				NUM_SCORE_TERREMOTO_FUT;
+/* Rischio transizione climatico */
+%let rischio_tran_pre = 	NUM_SCORE_RT_DECO_PRENOTCH;
+%let rischio_tran_post =	NUM_SCORE_RT_DECO_POSTNOTCH;
+/* Rischio ambientale - dependency (fisico) */
+%let rischio_amb_dep =		NUM_SCORE_DEP_AMBIENTALE
+				NUM_SCORE_DEP_ACQUA
+				NUM_SCORE_DEP_ATMOSFERA
+				NUM_SCORE_DEP_BIODIVERSITA
+				NUM_SCORE_DEP_LAND_OCEAN;
+/* Rischio ambientale - impact (transizione) */
+%let rischio_amb_imp = 		NUM_SCORE_IMP_SINTESI_AMBIENT
+				NUM_SCORE_IMP_BIODIVERSITA
+				NUM_SCORE_IMP_CONSUMO_ACQUA
+				NUM_SCORE_IMP_INQUINAMENTO
+				NUM_SCORE_IMP_PROD_RIFIUTI;
+/* Rischi CE - ALL */
+%let rischi_ce =		&rischio_fis_acu.
+				&hazard_fis_acu_bs.
+				&hazard_fis_acu_ft.
+				&rischio_fis_cro.
+				&hazard_fis_cro_bs.
+				&hazard_fis_cro_ft.
+				&rischio_non_cli.
+				&rischio_tran_pre.
+				&rischio_tran_post.
+				&rischio_amb_dep.
+				&rischio_amb_imp.;
+
+
+/* CHECK.4 - Spostamenti tra Dic24 e Dic25 */
+/* COSTRUZIONE MATRICI DI MIGRAZIONE */
+
+data crif_2024;
+set aggancio_esposizione;
+where datepart(dat_flusso)="31DEC2024"d;
+run;
+
+data crif_2025;
+set aggancio_esposizione;
+where datepart(dat_flusso)="31DEC2025"d;
+run;
+
+/* seleziono ogni score nei due anni diversi(ho creato due db nello step precedente) e aggiungo il suffisso dell'anno di appartenenza */
+%macro list_iteration(list=, prefix=, suffix=);
+
+	%local i var stem; /* CREATE IN LOCAL 3 VAR - i var stem */
+	%do i=1 %to %sysfunc(countw(&list., %str( )));
+		%let var=%scan(&list., &i., %str( ));
+		%let stem = %substr(&var.,11,26);
+		&prefix.&var. as &stem.&suffix. /* PREFIX IS NEDEED TO POINT THE DBs FOR THE JOIN */
+		%if &i. < %sysfunc(countw(&list., %str( ))) %then ,;
+	%end;
+%mend;
+
+/* creati gli score _25 e _24, creo la variabile delta per individuare eventuali delta (per ogni score) */
+%macro shift_iteration(list=, suf1=_24, suf2=_25);
+
+	%local i v stem;
+	%do i=1 %to %sysfunc(countw(&list., %str( )));
+		%let v = %scan(&list.,&i.);
+		%let stem = %substr(&v.,11,26);
+
+		(&stem.&suf2. - &stem.&suf1.) as SHIFT_&stem.
+		%if &i < %sysfunc(countw(&list.)) %then ,;
+	%end;
+%mend;
+
+/* aggancio tutto in un unico db */
+proc sql;
+	create table stability_check as
+	select
+		a.cod_banca
+		,a.cod_anag
+		,coalesce(b.ATECO2, a.ATECO2) as ATECO2
+		,a.des_note as NOTA_24
+		,b.des_note as NOTA_25
+		,%list_iteration(list=&rischi_ce., prefix=a., suffix=_24)
+		,%list_iteration(list=&rischi_ce., prefix=b., suffix=_25)
+		,%shift_iteration(list=&rischi_ce.)
+	from crif_2024 as a
+		inner join crif_2025 as b
+		on a.cod_banca = b.cod_banca
+		and a.cod_anag = b.cod_anag;
+quit;
+
+/* sub-db contentente soltanto le ctp per le quali almeno uno score si è modificato tra 24 e 25 */
+data check;
+set stability_check;
+	array shifts {*} SHIFT_:;
+    do i = 1 to dim(shifts);
+        if shifts{i} > 0 then output;
+    end;
+
+    drop i;
+run;
+
+/* Per ogni rischio, livello di spostamento tra 2024vs2025:
+alias, quanti cambiano score e di quanto cambia */
+%macro shift_magnitude(list=);
+	%local i v stem n;
+	%let n = %sysfunc(countw(&list., %str( )));
+
+	%do i=1 %to &n.;
+		%let v    = %scan(&list., &i., %str( ));
+		%let stem = %substr(&v.,11);
+
+		proc freq data=stability_check;
+			tables SHIFT_&stem. / list missing nocum
+			out=freq_SHIFT_&stem.;
+		run;
+
+	%end;
+%mend;
+
+%shift_magnitude(list=&rischi_ce.);
+
+/* CHECK.5 Analisi di Stabilità - ctp che cambiano score */
+%macro migration_matrix(list=);
+
+	%local i v stem n;
+	%let n = %sysfunc(countw(&list., %str( )));
+
+	%do i=1 %to &n.;
+		%let v    = %scan(&list., &i., %str( ));
+		%let stem = %substr(&v.,11);
+
+		proc freq data=stability_check noprint;
+			tables &stem._24 * &stem._25
+				/ missing
+				out=mig_&stem. (drop=percent);
+		run;
+
+	%end;
+%mend;
+
+%migration_matrix(list=&rischi_ce.);
+/* casistiche da evidenziare:
+- ctp con score 2024 missing -> score 2025 valorizzato 
+- ctp con score 2025 missing -> score 2024 valorizzato 
+Numeriche variano in base al rischio in considerazione */
+
+proc sort data=&lib_mapping..&db_mapping. nodupkey out=db_mapping_ateco_2;
+by 'Descrizione Codice Ateco 2 digit'n 'Codice Ateco 2 digits'n;
+run;
+
+proc sql;
+	create table stability_check_ateco
+	as select
+		a.*
+		,b.'Descrizione Codice Ateco 2 digit'n as DES_ATECO2
+		,case
+			when ateco is null then 0
+			else 1 end as fl_agg
+	from stability_check as a
+		left join db_mapping_ateco_2 as b
+		on a.ateco2 = b.'Codice Ateco 2 digits'n;
+quit;
+
+proc freq data=stability_check_ateco;
+table fl_agg / list missing nocum out=check;
+run;
+
+/* CHECK.6 Focus ctp con score missing nel '25 e valorizzato nel '24 */
+/* Rischio Fisico */
+proc freq data=stability_check_ateco (where=(SINTESI_ACUTO_BASE_25 = . and SINTESI_ACUTO_BASE_24 ne .));
+table NOTA_25 / list missing nocum out=freq_1;
+run;
+/* 5.399 */
+
+/* Rischio Transizione */
+proc freq data=stability_check_ateco (where=(RT_DECO_PRENOTCH_25 = . and RT_DECO_PRENOTCH_24 ne .));
+table NOTA_25 / list missing nocum out=freq_2;
+run;
+/* 13.565 */
+
+/* Rischio Ambientale */
+proc freq data=stability_check_ateco (where=(DEP_ATMOSFERA_25 = . and DEP_ATMOSFERA_24 ne .));
+table NOTA_25 / list missing nocum out=freq_3;
+run;
+/* 13.565 */
+
+/* CHECK.6.1 DEEPER FOCUS ON ATECO2=68 - ATTIVITA' IMM. */
+
+data att_imm_score25_missing;
+set stability_check_ateco;
+	where 
+/* casistica acuto */
+	(SINTESI_ACUTO_BASE_25 = . and 
+		SINTESI_ACUTO_BASE_24 ne .) or
+/* casistica trasizione */
+		(RT_DECO_PRENOTCH_25 = . and
+		RT_DECO_PRENOTCH_24 ne .) or
+/* casistica atmosfera */
+		(DEP_ATMOSFERA_25 = . and 
+		DEP_ATMOSFERA_24 ne .);
+run;
+
+/* Intreccio di casistiche dove score 2024 valorizzato, mentre socre 2025 missing */
+proc sql;
+	create table att_imm_score25_missing_fl
+	as select
+		*
+		,case
+			when (SINTESI_ACUTO_BASE_25 = . and SINTESI_ACUTO_BASE_24 ne .) then 1
+			else 0 end as fl_fisico
+		,case
+			when (RT_DECO_PRENOTCH_25 = . and RT_DECO_PRENOTCH_24 ne .) then 1
+			else 0 end as fl_transizione
+		,case
+			when (DEP_ATMOSFERA_25 = . and DEP_ATMOSFERA_24 ne .) then 1
+			else 0 end as fl_atmosfera
+	from att_imm_score25_missing;
+quit;
+
+
+proc freq data=att_imm_score25_missing_fl;
+table fl_fisico*fl_transizione*fl_atmosfera / list missing nocum out=freq;
+run;
+
+/* CHECK.6 Focus ctp con score missing nel '24 e valorizzato nel '25 */
+/* Rischio Fisico */
+proc freq data=stability_check_ateco (where=(SINTESI_ACUTO_BASE_24 = . and SINTESI_ACUTO_BASE_25 ne .));
+table ateco2*des_ateco2 / list missing nocum out=freq_4;
+run;
+/* 5.399 */
+
+/* Rischio Transizione */
+proc freq data=stability_check_ateco (where=(RT_DECO_PRENOTCH_24 = . and RT_DECO_PRENOTCH_25 ne .));
+table ateco2*des_ateco2 / list missing nocum out=freq_5;
+run;
+/* 13.565 */
+
+/* Rischio Ambientale */
+proc freq data=stability_check_ateco (where=(DEP_ATMOSFERA_24 = . and DEP_ATMOSFERA_25 ne .));
+table ateco2*des_ateco2 / list missing nocum out=freq_6;
+run;
+/* 13.565 */
+
+proc freq data=stability_check (where=(FORTI_PRECIP_FUT_25 = . and FORTI_PRECIP_FUT_24 ne .));
+table NOTA_25 / list missing nocum out=freq_1;
+run;
+
