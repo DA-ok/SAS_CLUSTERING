@@ -27,83 +27,82 @@ proc contents data=&lib_in..&db_in.; run;
 
 /*Rischio fisico acuto */
 %let rischio_fis_acu = 		NUM_SCORE_SINTESI_ACUTO_BASE
-				NUM_SCORE_SINTESI_ACUTO_FUT;
+							NUM_SCORE_SINTESI_ACUTO_FUT;
 %let hazard_fis_acu_bs =	NUM_SCORE_ALLUVIONE_BASE 
-				NUM_SCORE_FORTI_PRECIP_BASE
-				NUM_SCORE_FRANE_BASE
-				NUM_SCORE_ONDATE_CALORE_BASE 
-				NUM_SCORE_ONDATE_FREDDO_BASE
-				NUM_SCORE_SICCITA_BASE
-				NUM_SCORE_VENTO_ESTREMO_BASE
-				NUM_SCORE_INCENDI_BASE ;
+							NUM_SCORE_FORTI_PRECIP_BASE
+							NUM_SCORE_FRANE_BASE
+							NUM_SCORE_ONDATE_CALORE_BASE 
+							NUM_SCORE_ONDATE_FREDDO_BASE
+							NUM_SCORE_SICCITA_BASE
+							NUM_SCORE_VENTO_ESTREMO_BASE
+							NUM_SCORE_INCENDI_BASE ;
 %let hazard_fis_acu_ft =	NUM_SCORE_ALLUVIONE_FUT
-				NUM_SCORE_FORTI_PRECIP_FUT
-				NUM_SCORE_FRANE_FUT
-				NUM_SCORE_ONDATE_CALORE_FUT
-				NUM_SCORE_ONDATE_FREDDO_FUT
-				NUM_SCORE_SICCITA_FUT
-				NUM_SCORE_VENTO_ESTREMO_FUT
-				NUM_SCORE_INCENDI_FUT;
+							NUM_SCORE_FORTI_PRECIP_FUT
+							NUM_SCORE_FRANE_FUT
+							NUM_SCORE_ONDATE_CALORE_FUT
+							NUM_SCORE_ONDATE_FREDDO_FUT
+							NUM_SCORE_SICCITA_FUT
+							NUM_SCORE_VENTO_ESTREMO_FUT
+							NUM_SCORE_INCENDI_FUT;
 /* Rischio fisico cronico */
 %let rischio_fis_cro =		NUM_SCORE_SINTESI_CRONICO_BASE 
-				NUM_SCORE_SINTESI_CRONICO_FUT;
+							NUM_SCORE_SINTESI_CRONICO_FUT;
 %let hazard_fis_cro_bs =	NUM_SCORE_DEGRAD_TERRENO_BASE 
-				NUM_SCORE_EROSIONE_COSTE_BASE 
-				NUM_SCORE_PERMAFROST_BASE
-				NUM_SCORE_STRESS_IDRICO_BASE
-				NUM_SCORE_STRESS_TERMICO_BASE;
+							NUM_SCORE_EROSIONE_COSTE_BASE 
+							NUM_SCORE_PERMAFROST_BASE
+							NUM_SCORE_STRESS_IDRICO_BASE
+							NUM_SCORE_STRESS_TERMICO_BASE;
 %let hazard_fis_cro_ft = 	NUM_SCORE_CAMB_PRECIP_FUT
-				NUM_SCORE_CAMB_TEMP_FUT
-				NUM_SCORE_CAMB_VENTO_FUT
-				NUM_SCORE_DEGRAD_TERRENO_FUT
-				NUM_SCORE_EROSIONE_COSTA_FUT
-				NUM_SCORE_INNALZ_MARE_FUT
-				NUM_SCORE_PERMAFROST_FUT
-				NUM_SCORE_STRESS_IDRICO_FUT
-				NUM_SCORE_STRESS_TERMICO_FUT;
+							NUM_SCORE_CAMB_TEMP_FUT
+							NUM_SCORE_CAMB_VENTO_FUT
+							NUM_SCORE_DEGRAD_TERRENO_FUT
+							NUM_SCORE_EROSIONE_COSTA_FUT
+							NUM_SCORE_INNALZ_MARE_FUT
+							NUM_SCORE_PERMAFROST_FUT
+							NUM_SCORE_STRESS_IDRICO_FUT
+							NUM_SCORE_STRESS_TERMICO_FUT;
 /* Rischio acuto non climatico */
 %let rischio_non_cli = 		NUM_SCORE_TERREMOTO_BASE
-				NUM_SCORE_TERREMOTO_FUT;
+							NUM_SCORE_TERREMOTO_FUT;
 /* Rischio transizione climatico */
 %let rischio_tran_pre = 	NUM_SCORE_RT_DECO_PRENOTCH;
 %let rischio_tran_post =	NUM_SCORE_RT_DECO_POSTNOTCH;
 /* Rischio ambientale - dependency (fisico) */
 %let rischio_amb_dep =		NUM_SCORE_DEP_AMBIENTALE
-				NUM_SCORE_DEP_ACQUA
-				NUM_SCORE_DEP_ATMOSFERA
-				NUM_SCORE_DEP_BIODIVERSITA
-				NUM_SCORE_DEP_LAND_OCEAN;
+							NUM_SCORE_DEP_ACQUA
+							NUM_SCORE_DEP_ATMOSFERA
+							NUM_SCORE_DEP_BIODIVERSITA
+							NUM_SCORE_DEP_LAND_OCEAN;
 /* Rischio ambientale - impact (transizione) */
 %let rischio_amb_imp = 		NUM_SCORE_IMP_SINTESI_AMBIENT
-				NUM_SCORE_IMP_BIODIVERSITA
-				NUM_SCORE_IMP_CONSUMO_ACQUA
-				NUM_SCORE_IMP_INQUINAMENTO
-				NUM_SCORE_IMP_PROD_RIFIUTI;
+							NUM_SCORE_IMP_BIODIVERSITA
+							NUM_SCORE_IMP_CONSUMO_ACQUA
+							NUM_SCORE_IMP_INQUINAMENTO
+							NUM_SCORE_IMP_PROD_RIFIUTI;
 /* Rischi CE - ALL */
-%let rischi_ce =		&rischio_fis_acu.
-				&hazard_fis_acu_bs.
-				&hazard_fis_acu_ft.
-				&rischio_fis_cro.
-				&hazard_fis_cro_bs.
-				&hazard_fis_cro_ft.
-				&rischio_non_cli.
-				&rischio_tran_pre.
-				&rischio_tran_post.
-				&rischio_amb_dep.
-				&rischio_amb_imp.;
-
+%let rischi_ce =			&rischio_fis_acu.
+							&hazard_fis_acu_bs.
+							&hazard_fis_acu_ft.
+							&rischio_fis_cro.
+							&hazard_fis_cro_bs.
+							&hazard_fis_cro_ft.
+							&rischio_non_cli.
+							&rischio_tran_pre.
+							&rischio_tran_post.
+							&rischio_amb_dep.
+							&rischio_amb_imp.;
 
 /* CHECK.4 - Spostamenti tra Dic24 e Dic25 */
 /* COSTRUZIONE MATRICI DI MIGRAZIONE */
 
 data crif_2024;
 set aggancio_esposizione;
-where datepart(dat_flusso)="31DEC2024"d;
+	where datepart(dat_flusso)="31DEC2024"d;
 run;
 
 data crif_2025;
 set aggancio_esposizione;
-where datepart(dat_flusso)="31DEC2025"d;
+	where datepart(dat_flusso)="31DEC2025"d;
 run;
 
 /* seleziono ogni score nei due anni diversi(ho creato due db nello step precedente) e aggiungo il suffisso dell'anno di appartenenza */
