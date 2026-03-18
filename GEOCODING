@@ -1,0 +1,278 @@
+# In[1]:
+
+# data manipulation
+import pandas as pd
+import numpy as np
+
+# geocoding
+import osmnx as ox
+import geopandas as gpd
+import geopandas as gpd
+
+
+# In[82]:
+
+
+url = 'PATH_TO_YOUR_DB'
+
+
+# In[99]:
+
+
+db_aler = pd.read_excel(url, sheet_name='ALL_AUCTIONS')
+
+
+# In[100]:
+
+
+db_aler
+
+
+# In[101]:
+
+
+db_aler['Località'] = db_aler['Località'].replace('SAN DONATO MILANE', 'SAN DONATO MILANESE')
+db_aler
+
+
+# In[102]:
+
+
+check3 = db_aler[db_aler['Località'] == 'SAN DONATO MILANE']
+check3
+
+
+# In[103]:
+
+
+db_aler['PAESE'] = 'ITALIA'
+
+
+# In[104]:
+
+
+db_aler
+
+
+# In[124]:
+
+
+db_aler['PB_STD'] = db_aler.groupby(['Località','AUCTION_YEAR'])['Prezzo_Base'].transform('std')
+db_aler
+
+
+# In[125]:
+
+
+db_aler_fil1 = db_aler[db_aler['Località'] != 'MILANO']
+db_aler_fil1
+
+
+# In[126]:
+
+
+db_aler_fil1.groupby(['Località','AUCTION_YEAR'])['PB_STD'].count()
+
+
+# In[127]:
+
+
+db_aler_fil2 = db_aler_fil1[db_aler_fil1['PB_STD'].notna()]
+db_aler_fil2
+
+
+# In[128]:
+
+
+check2 = db_aler_fil2.groupby(['Località','AUCTION_YEAR','PB_STD'])['PB_STD'].count()
+check2
+
+
+# In[129]:
+
+
+# località
+loc_uni_fil = db_aler_fil2['Località'].unique().tolist()
+loc_uni_fil
+
+
+# In[130]:
+
+
+n_list1 = len(loc_uni_fil)
+n_list1
+
+
+# In[131]:
+
+
+loc_it = [f'{c}, ITALIA' for c in loc_uni_fil]
+loc_it
+
+
+# In[132]:
+
+
+# I specify the elements that define the surface
+URBAN_LANDUSE = ['residential'
+                 ,'commercial'
+                 ,'industrial'
+                 ,'retail'
+                 ,'construction'
+                 ,'allotments'
+                 ,'brownfield'
+                 ,'railway'
+                 ,'transport'
+                ]
+
+
+# In[133]:
+
+
+# Function that calculates the surface
+def urban_surface_km2(city_name):
+    try:
+        # Get the city boundary
+        boundary = ox.geocode_to_gdf(city_name)
+
+        # Get urban land-use polygons
+        tags = {"landuse": URBAN_LANDUSE}
+        urban = ox.features_from_place(city_name, tags)
+
+        # Clip urban polygons to city boundary
+        urban = gpd.clip(urban, boundary)
+
+        # Project to metric CRS for area calculation
+        urban = urban.to_crs(epsg=3035)
+        boundary = boundary.to_crs(epsg=3035)
+
+        # Compute total urban surface in km²
+        area_km2 = urban.geometry.area.sum() / 1e6  # m² → km²
+
+        return area_km2
+
+    except Exception as e:
+        print(f"Could not compute urban surface for {city_name}: {e}")
+        return None
+
+
+# In[134]:
+
+
+# linking the surfaces the the corresponding cities
+loc_surf = []
+for i in loc_it:
+    area = urban_surface_km2(i)
+    loc_surf.append({'Località':i,'urban_surface_km2':area})
+
+df_surf = pd.DataFrame(loc_surf)
+print(df_surf)
+
+
+# In[135]:
+
+
+df_surf["Località"] = df_surf["Località"].str.replace(", ITALIA","", regex=False)
+df_surf
+
+
+# In[136]:
+
+
+db_aler2 = db_aler_fil2.merge(df_surf, how='left', on='Località')
+db_aler2
+
+
+# In[137]:
+
+
+db_aler2['urban_surface_km2'].value_counts()
+
+
+# In[138]:
+
+
+# computing the std on delta_price
+db_aler2['DP_STD'] = db_aler2.groupby(['Località','AUCTION_YEAR'])['DELTA_PRICE'].transform('std')
+db_aler2
+
+
+# In[139]:
+
+
+db_aler2['DELTA_PRICE_COR'] = pd.to_numeric(db_aler2['DELTA_PRICE'], errors='coerce')
+db_aler2
+
+
+# In[142]:
+
+
+check = db_aler2[db_aler2['DELTA_PRICE_COR'].isna()]
+check
+
+
+# In[143]:
+
+
+db_aler2['DP_STD'] = db_aler2.groupby(['Località','AUCTION_YEAR'])['DELTA_PRICE_COR'].transform('std')
+db_aler2
+
+
+# In[146]:
+
+
+db_aler2.groupby(['Località','AUCTION_YEAR','DP_STD'])['DP_STD'].count()
+
+
+# In[147]:
+
+
+db_aler2 = db_aler2[db_aler2['DP_STD'] != 0]
+db_aler2.groupby(['Località','AUCTION_YEAR','DP_STD'])['DP_STD'].count()
+
+
+# In[148]:
+
+
+db_aler2.to_excel('/Users/antoniodagosto/Library/CloudStorage/OneDrive-Personal/CASA_MILANO/01.ALER/01.ASTE/02.EXCEL/20260114_DB_ALER.xlsx', index=False)
+
+
+# In[2]:
+
+
+url1 = "/Users/antoniodagosto/Library/CloudStorage/OneDrive-Personal/CASA_MILANO/04.GEODING/01.COORDINATE/01.ZONE OMI/F205 - Comune di MILANO 2025-1.kmz"
+
+
+# In[3]:
+
+
+gdf = gpd.read_file(url1, driver="KML")
+print(gdf.head())
+
+
+# In[4]:
+
+
+gdf_gemoetry = gdf[['CODZONA','geometry']]
+gdf_gemoetry.head()
+
+
+# In[5]:
+
+
+check = gdf_gemoetry[gdf_gemoetry['CODZONA']=='D38']
+check
+
+
+# In[6]:
+
+
+check.to_excel('/Users/antoniodagosto/Library/CloudStorage/OneDrive-Personal/CASA_MILANO/01.ALER/01.ASTE/02.EXCEL/check_geometry.xlsx', index=False)
+
+
+# In[ ]:
+
+
+
+
+
